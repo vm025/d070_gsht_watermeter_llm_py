@@ -11,7 +11,11 @@ dependencies = [
     "google-auth>=2.62.0",
     "google-genai>=2.31.0",
     "gspread>=6.2.1",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
     "pillow>=12.3.0",
+    "plotly>=7.1.0",
+    "requests>=2.34.2",
     "streamlit>=1.66.0",
     "tzdata>=2026.5",
 ]
