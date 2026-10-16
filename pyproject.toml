@@ -1,0 +1,24 @@
+[project]
+name = "d070-gsht-watermeter-llm-py"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "vmu", email = "vmurthy025@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "google-auth>=2.62.0",
+    "google-genai>=2.31.0",
+    "gspread>=6.2.1",
+    "pillow>=12.3.0",
+    "streamlit>=1.66.0",
+    "tzdata>=2026.5",
+]
+
+[project.scripts]
+d070-gsht-watermeter-llm-py = "d070_gsht_watermeter_llm_py:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
