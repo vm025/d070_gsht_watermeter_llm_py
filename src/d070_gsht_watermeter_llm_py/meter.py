@@ -114,14 +114,18 @@ def open_spreadsheet():
 
 def get_month_tab(ss, now: datetime):
     name = f"{MONTHS[now.month - 1]}-{now.year}"
-    try:
-        ws = ss.worksheet(name)
-        dbg(f"Tab '{name}' exists")
-    except gspread.WorksheetNotFound:
-        dbg(f"Tab '{name}' missing; creating from latest tab as template")
-        template = ss.worksheets()[-1]
-        ws = ss.duplicate_sheet(template.id, new_sheet_name=name)
-        ws.batch_clear(["A2:C"])      # keep headers + formula columns, drop old data
+    m3 = MONTHS[now.month - 1][:3]
+    # Google treats tab names case-insensitively, so match that way (and accept sep/sept).
+    wanted = {name.lower(), f"{m3}-{now.year}".lower()}
+    sheets = ss.worksheets()
+    dbg("Existing tabs: " + ", ".join(repr(w.title) for w in sheets))
+    for w in sheets:
+        if w.title.strip().lower() in wanted:
+            dbg(f"Using existing tab {w.title!r}")
+            return w
+    dbg(f"Tab '{name}' missing; creating from latest tab as template")
+    ws = ss.duplicate_sheet(sheets[-1].id, new_sheet_name=name)
+    ws.batch_clear(["A2:C"])      # keep headers + formula columns, drop old data
     return ws
 
 
@@ -175,6 +179,9 @@ def retake():
 
 
 # ---------------------------------------------------------------- UI
+if S.pop("reset_reading", False):
+    S.reading_input = ""
+
 st.title("💧 Water Meter")
 S.debug_on = st.radio("Debug", ["Off", "On"], horizontal=True, index=0) == "On"
 
@@ -192,7 +199,7 @@ if not S.unlocked:
 else:
     has_photo = S.photo is not None
     c1, c2, c3 = st.columns(3)
-    c1.button("Take photo", key="btn_take", on_click=take_photo,
+    c1.button("Open Camera", key="btn_take", on_click=take_photo,
               disabled=has_photo)
     c2.button("Retake", key="btn_retake", on_click=retake, disabled=not has_photo)
     submit = c3.button("Submit", key="btn_submit", disabled=not has_photo)
@@ -234,7 +241,7 @@ else:
                     S.success = f"Saved {int(r)} to {where}"
                     S.photo, S.camera_open = None, False
                     S.cam_n += 1
-                    S.reading_input = ""
+                    S.reset_reading = True      # cleared at top of next run, before the widget exists
                     st.rerun()
                 except Suspicious as e:
                     S.confirm_val = r
