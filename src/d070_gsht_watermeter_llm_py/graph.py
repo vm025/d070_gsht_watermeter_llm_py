@@ -21,7 +21,7 @@ ALL = "All"
 # ----------------------------------------------------------------- config --
 def get_config() -> tuple[str | None, int, int]:
     try:
-        url = st.secrets["sheet"]["url"]
+        url = st.secrets["sheet"]["url_read"]
     except Exception:
         url = None
     try:
@@ -92,7 +92,7 @@ def make_bar_or_line(x, y, kind: str, categorical: bool) -> go.Figure:
     if kind == "Bar":
         trace = go.Bar(
             x=x, y=y,
-            marker=dict(color=y, colorscale="Turbo", line=dict(color="white", width=1)),
+            marker=dict(color=y, colorscale=[[0, "#cfe3f1"], [1, "#4a86b0"]], line=dict(color="white", width=1)),
             hovertemplate="%{x}<br><b>%{y:.0f} m³</b><extra></extra>",
         )
     else:
@@ -175,7 +175,7 @@ def main() -> None:
     st.set_page_config(page_title="Water Meter Dashboard", page_icon="💧", layout="centered")
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown('<div class="hero"><h1>💧 Water Meter Dashboard</h1>'
-                "<p>Daily inflow from Google Sheets</p></div>", unsafe_allow_html=True)
+                "<p>Daily inflows</p></div>", unsafe_allow_html=True)
 
     url, gauge_max, gauge_step = get_config()
     if not url:

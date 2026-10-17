@@ -1,4 +1,21 @@
-"""Water-meter reader: camera photo -> Gemini -> editable reading -> Google Sheet."""
+"""Water-meter reader: camera photo -> Gemini -> editable reading -> Google Sheet.
+
+
+First reading of a new month: the app now looks at the other tabs and compares against the highest last 
+reading found there. A drop at the month boundary is therefore caught too. This only reads other tabs 
+when the current one is empty, so it adds no delay for normal saves.
+Large jump: a reading more than 150 m³ above the last one still shows a warning, and a second 
+Send saves it. That is meant for a real surge, not for a lower value.
+
+The consequence is that a wrong high reading, once saved, blocks every correct reading after it
+ until you fix the sheet by hand. The same applies if the meter is ever replaced. Because of that, 
+ the large-jump warning is the main protection against saving a misread high number.
+
+On the first reading of a new month, a blocked reading can leave behind an empty new month tab. 
+The tab is created before the check runs, and the next valid reading will use it.
+
+
+"""
 import hmac
 import io
 import json
@@ -17,7 +34,11 @@ MAX_JUMP = 150   # m3 between consecutive readings before we ask for confirmatio
 
 
 class Suspicious(Exception):
-    pass
+    """Unusually large jump: can be confirmed by pressing Send again."""
+
+
+class LowerReading(Exception):
+    """New reading is below the last saved one: always rejected."""
 
 IST = ZoneInfo("Asia/Kolkata")
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun",
@@ -109,7 +130,7 @@ def read_meter(image_bytes: bytes) -> str:
 def open_spreadsheet():
     creds = Credentials.from_service_account_info(
         dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
-    return gspread.authorize(creds).open_by_url(st.secrets["sheet"]["url"])
+    return gspread.authorize(creds).open_by_url(st.secrets["sheet"]["url_edit"])
 
 
 def get_month_tab(ss, now: datetime):
@@ -127,6 +148,13 @@ def get_month_tab(ss, now: datetime):
     ws = ss.duplicate_sheet(sheets[-1].id, new_sheet_name=name)
     ws.batch_clear(["A2:C"])      # keep headers + formula columns, drop old data
     return ws
+
+
+def last_reading(ws):
+    """Last numeric value in column C (handles formatted text like '57,415')."""
+    vals = [re.sub(r"\D", "", str(v)) for v in ws.col_values(3)[1:]]
+    vals = [int(v) for v in vals if v]
+    return vals[-1] if vals else None
 
 
 def fill_formulas_down(ss, ws, row: int) -> None:
@@ -152,12 +180,17 @@ def write_reading(reading: str, force: bool = False) -> str:
     ss = open_spreadsheet()
     ws = get_month_tab(ss, now)
     row = len(ws.col_values(1)) + 1
-    prev = [int(d) for d in (re.sub(r"\D", "", str(v)) for v in ws.col_values(3)[1:]) if d]  # "57,415" -> 57415
-    if prev and not force:
-        last, new = prev[-1], int(reading)
+    last = last_reading(ws)
+    if last is None:        # first entry of a new month: use the highest last value in other tabs
+        others = [last_reading(w) for w in ss.worksheets() if w.id != ws.id]
+        others = [v for v in others if v is not None]
+        last = max(others) if others else None
+    dbg(f"Last saved reading: {last}")
+    new = int(reading)
+    if last is not None:
         if new < last:
-            raise Suspicious(f"{new} is LOWER than the last reading ({last}).")
-        if new - last > MAX_JUMP:
+            raise LowerReading(f"{new} is lower than the last saved reading ({last}). Not saved.")
+        if new - last > MAX_JUMP and not force:
             raise Suspicious(f"{new} is {new - last} above the last reading ({last}).")
     values = [[now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), int(reading)]]
     ws.update(range_name=f"A{row}:C{row}", values=values, value_input_option="RAW")
@@ -243,6 +276,10 @@ else:
                     S.cam_n += 1
                     S.reset_reading = True      # cleared at top of next run, before the widget exists
                     st.rerun()
+                except LowerReading as e:
+                    S.confirm_val = None
+                    dbg(f"Blocked: {e}")
+                    S.error = str(e)
                 except Suspicious as e:
                     S.confirm_val = r
                     dbg(f"Sanity check: {e}")
