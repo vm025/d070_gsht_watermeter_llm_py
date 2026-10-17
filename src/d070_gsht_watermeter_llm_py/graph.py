@@ -1,4 +1,6 @@
 """Water meter dashboard (Streamlit) fed by a Google Sheet."""
+
+
 from __future__ import annotations
 
 import io
@@ -189,8 +191,11 @@ def main() -> None:
     try:
         raw = fetch_workbook(url)
         xls = pd.ExcelFile(io.BytesIO(raw))
-    except Exception as e:  # network / permission / format problems
-        st.error(f"Could not read the Google Sheet: {e}")
+    except PermissionError as e:  # our own message, contains no URL
+        st.error(str(e))
+        st.stop()
+    except Exception as e:  # network / format problems; never echo the URL
+        st.error(f"Could not read the Google Sheet ({type(e).__name__}). Check the sheet's sharing settings and your network.")
         st.stop()
 
     tabs = month_tabs(xls)
