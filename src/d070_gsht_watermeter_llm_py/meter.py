@@ -173,6 +173,19 @@ def get_month_tab(ss, now: datetime):
     return ws
 
 
+def probe_edit_access(ss) -> None:
+    """After a failed write, record in the debug panel whether the account has edit rights."""
+    try:
+        r = ss.client.http_client.request(
+            "get", f"https://www.googleapis.com/drive/v3/files/{ss.id}",
+            params={"fields": "capabilities/canEdit", "supportsAllDrives": "true"})
+        can = r.json().get("capabilities", {}).get("canEdit")
+        dbg(f"Access probe: service account canEdit={can} "
+            "(False = Viewer/Commenter role; True = a protected range/tab is blocking the write)")
+    except Exception as e:
+        dbg(f"Access probe failed: {e!r}")
+
+
 def last_reading(ws):
     """Last numeric value in column C (handles formatted text like '57,415')."""
     vals = [re.sub(r"\D", "", str(v)) for v in ws.col_values(3)[1:]]
@@ -201,6 +214,9 @@ def fill_formulas_down(ss, ws, row: int) -> None:
 def write_reading(reading: str, force: bool = False) -> str:
     now = datetime.now(IST)
     _step("open spreadsheet")
+    sa = st.secrets["gcp_service_account"]
+    dbg("Service account fingerprint: "
+        f"{str(sa.get('client_email', ''))[:6]}... / key id ...{str(sa.get('private_key_id', ''))[-4:]}")
     ss = open_spreadsheet()
     _step("find or create month tab")
     ws = get_month_tab(ss, now)
@@ -220,7 +236,11 @@ def write_reading(reading: str, force: bool = False) -> str:
             raise Suspicious(f"{new} is {new - last} above the last reading ({last}).")
     _step(f"write row {row}")
     values = [[now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), int(reading)]]
-    ws.update(range_name=f"A{row}:C{row}", values=values, value_input_option="RAW")
+    try:
+        ws.update(range_name=f"A{row}:C{row}", values=values, value_input_option="RAW")
+    except gspread.exceptions.APIError as e:
+        probe_edit_access(ss)       # logs whether the account can edit at all
+        raise
     dbg(f"Wrote {values[0]} to '{ws.title}' row {row}")
     fill_formulas_down(ss, ws, row)
     return f"{ws.title}, row {row}"
