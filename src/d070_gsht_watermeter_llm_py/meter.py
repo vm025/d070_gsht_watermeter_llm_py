@@ -1,21 +1,4 @@
-"""Water-meter reader: camera photo -> Gemini -> editable reading -> Google Sheet.
-
-
-First reading of a new month: the app now looks at the other tabs and compares against the highest last 
-reading found there. A drop at the month boundary is therefore caught too. This only reads other tabs 
-when the current one is empty, so it adds no delay for normal saves.
-Large jump: a reading more than 150 m³ above the last one still shows a warning, and a second 
-Send saves it. That is meant for a real surge, not for a lower value.
-
-The consequence is that a wrong high reading, once saved, blocks every correct reading after it
- until you fix the sheet by hand. The same applies if the meter is ever replaced. Because of that, 
- the large-jump warning is the main protection against saving a misread high number.
-
-On the first reading of a new month, a blocked reading can leave behind an empty new month tab. 
-The tab is created before the check runs, and the next valid reading will use it.
-
-
-"""
+"""Water-meter reader: camera photo -> Gemini -> editable reading -> Google Sheet."""
 import hmac
 import io
 import json
@@ -90,8 +73,29 @@ for k, v in {"unlocked": False, "camera_open": False, "photo": None,
     S.setdefault(k, v)
 
 
+def redact(text) -> str:
+    """Hide URLs, spreadsheet IDs, e-mails and key material from anything shown in the UI."""
+    t = str(text)
+    secret_bits = []
+    try:
+        url = st.secrets["sheet"]["url"]
+        m = re.search(r"/d/([A-Za-z0-9_-]+)", url)
+        secret_bits += [url, m.group(1) if m else ""]
+        secret_bits += [st.secrets["gemini"]["api_key"],
+                        st.secrets["gcp_service_account"].get("client_email", "")]
+    except Exception:
+        pass
+    for b in secret_bits:
+        if b:
+            t = t.replace(b, "<hidden>")
+    t = re.sub(r"https?://\S+", "<url>", t)
+    t = re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", "<email>", t)
+    t = re.sub(r"[A-Za-z0-9_-]{30,}", "<id>", t)
+    return t
+
+
 def dbg(msg: str) -> None:
-    S.debug.append(f"{datetime.now(IST):%H:%M:%S}  {msg}")
+    S.debug.append(f"{datetime.now(IST):%H:%M:%S}  {redact(msg)}")
 
 
 def clear_debug() -> None:          # on_click callback -> runs before re-render
@@ -127,10 +131,29 @@ def read_meter(image_bytes: bytes) -> str:
     return digits.lstrip("0")
 
 
+def _step(name: str) -> None:
+    S.last_step = name
+    dbg(f"Step: {name}")
+
+
+def explain_api_error(e: Exception) -> str:
+    """Turn a gspread APIError into a message that says what failed and what to check."""
+    code = getattr(getattr(e, "response", None), "status_code", "?")
+    msg = f"Google rejected the request at step '{S.get('last_step', '?')}' (HTTP {code}): {e}"
+    if code == 403:
+        msg += ("\n\nCheck that the sheet is still shared as Editor with the service account "
+                "(its client_email is in secrets.toml), "
+                "that this app is using the same secrets as before, and that the "
+                "Sheets API is enabled for that service account's project.")
+    elif code == 429:
+        msg += "\n\nGoogle rate limit reached; wait a minute and press Send again."
+    return msg
+
+
 def open_spreadsheet():
     creds = Credentials.from_service_account_info(
         dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
-    return gspread.authorize(creds).open_by_url(st.secrets["sheet"]["url_edit"])
+    return gspread.authorize(creds).open_by_url(st.secrets["sheet"]["url"])
 
 
 def get_month_tab(ss, now: datetime):
@@ -177,8 +200,11 @@ def fill_formulas_down(ss, ws, row: int) -> None:
 
 def write_reading(reading: str, force: bool = False) -> str:
     now = datetime.now(IST)
+    _step("open spreadsheet")
     ss = open_spreadsheet()
+    _step("find or create month tab")
     ws = get_month_tab(ss, now)
+    _step("read existing rows")
     row = len(ws.col_values(1)) + 1
     last = last_reading(ws)
     if last is None:        # first entry of a new month: use the highest last value in other tabs
@@ -192,6 +218,7 @@ def write_reading(reading: str, force: bool = False) -> str:
             raise LowerReading(f"{new} is lower than the last saved reading ({last}). Not saved.")
         if new - last > MAX_JUMP and not force:
             raise Suspicious(f"{new} is {new - last} above the last reading ({last}).")
+    _step(f"write row {row}")
     values = [[now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), int(reading)]]
     ws.update(range_name=f"A{row}:C{row}", values=values, value_input_option="RAW")
     dbg(f"Wrote {values[0]} to '{ws.title}' row {row}")
@@ -216,7 +243,7 @@ if S.pop("reset_reading", False):
     S.reading_input = ""
 
 st.title("💧 Water Meter")
-S.debug_on = st.radio("Debug", ["Off", "On"], horizontal=True, index=0) == "On"
+S.debug_on = S.unlocked and st.radio("Debug", ["Off", "On"], horizontal=True, index=0) == "On"
 
 if not S.unlocked:
     code = st.text_input("Enter passcode", type="password", max_chars=6,
@@ -284,14 +311,17 @@ else:
                     S.confirm_val = r
                     dbg(f"Sanity check: {e}")
                     S.error = f"{e} Check the photo; press Send again to save anyway."
+                except gspread.exceptions.APIError as e:
+                    dbg(f"Sheet API error: {e!r}")
+                    S.error = explain_api_error(e)
                 except Exception as e:
                     dbg(f"Sheet error: {e!r}")
                     S.error = f"Saving failed: {e}"
 
     if S.error:
-        st.error(S.error)
+        st.error(redact(S.error))
     if S.success:
-        st.success(S.success)
+        st.success(redact(S.success))
 
 if S.debug_on:
     st.divider()
