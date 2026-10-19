@@ -282,7 +282,7 @@ else:
     c1.button("Open Camera", key="btn_take", on_click=take_photo,
               disabled=has_photo)
     c2.button("Retake", key="btn_retake", on_click=retake, disabled=not has_photo)
-    submit = c3.button("Submit", key="btn_submit", disabled=not has_photo)
+    submit = c3.button("Submit Photo", key="btn_submit", disabled=not has_photo)
 
     if S.camera_open and not has_photo:
         shot = st.camera_input("Meter photo", key=f"cam_{S.cam_n}",
@@ -308,7 +308,7 @@ else:
     if has_photo:
         st.text_input("Meter reading (editable)", key="reading_input",
                       help="Check against the photo and correct if needed.")
-        if st.button("Send", key="btn_send"):
+        if st.button("Send Reading", key="btn_send"):
             S.error, S.success = None, None
             r = S.reading_input.strip()
             if not r.isdigit():
